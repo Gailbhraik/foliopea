@@ -1,10 +1,6 @@
-// Résout un ISIN en métadonnées via OpenFIGI (gratuit, sans clé) + Yahoo Finance pour le cours
-// Fonctionne pour tous les ISIN mondiaux : FR, DK, US, LU...
-
 const KEY = process.env.ALPHA_VANTAGE_API_KEY;
 const AV_BASE = 'https://www.alphavantage.co/query';
 
-// Mapping manuel pour les valeurs françaises et ETF PEA courants
 const KNOWN = {
   'FR0000120073': { name: 'Air Liquide', ticker: 'AI.PA', sector: 'Industrie', type: 'Action' },
   'FR0000121014': { name: 'LVMH', ticker: 'MC.PA', sector: 'Luxe', type: 'Action' },
@@ -25,14 +21,16 @@ const KNOWN = {
   'US67066G1040': { name: 'NVIDIA', ticker: 'NVDA', sector: 'Technologie', type: 'Action' },
 };
 
-async function getPrice(ticker) {
+async function getQuote(ticker) {
   if (!KEY) return null;
   try {
     const url = `${AV_BASE}?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(ticker)}&apikey=${encodeURIComponent(KEY)}`;
     const res = await fetch(url, { cache: 'no-store' });
     const data = await res.json();
-    const p = Number(data?.['Global Quote']?.['05. price']);
-    return p > 0 ? p : null;
+    const gq = data?.['Global Quote'];
+    const price = Number(gq?.['05. price']);
+    if (!price || price <= 0) return null;
+    return { price };
   } catch { return null; }
 }
 
@@ -47,8 +45,7 @@ async function resolveViaOpenFIGI(isin) {
     const data = await res.json();
     const matches = data?.[0]?.data;
     if (!matches?.length) return null;
-    // Préférer les entrées avec exchCode reconnu
-    const preferred = matches.find(m => ['UN', 'UP', 'UA', 'UW', 'US', 'PA', 'GY', 'LN'].includes(m.exchCode)) || matches[0];
+    const preferred = matches.find(m => ['UN','UP','UA','UW','US','PA','GY','LN'].includes(m.exchCode)) || matches[0];
     return {
       name: preferred.name || preferred.securityDescription || isin,
       ticker: preferred.ticker,
@@ -59,7 +56,6 @@ async function resolveViaOpenFIGI(isin) {
 }
 
 function buildAvTicker(ticker, exchCode) {
-  // Mappe le exchCode OpenFIGI vers le suffixe Alpha Vantage
   const map = { PA: '.PA', GY: '.DE', LN: '.LON', SW: '.SWX', AS: '.AMS', MI: '.MIL', MC: '.MC', HK: '.HK', TO: '.TRT' };
   if (!exchCode) return ticker;
   const suffix = map[exchCode];
@@ -75,23 +71,20 @@ export async function GET(req) {
   // 1. Mapping manuel
   if (KNOWN[isin]) {
     const k = KNOWN[isin];
-    const price = await getPrice(k.ticker) ?? 0;
-    return Response.json({ ...k, isin, price, source: price ? 'alphavantage' : 'mock' });
+    const quote = await getQuote(k.ticker);
+    return Response.json({ ...k, isin, price: quote?.price ?? 0, source: quote ? 'alphavantage' : 'mock' });
   }
 
-  // 2. OpenFIGI pour trouver le ticker
+  // 2. OpenFIGI
   const figi = await resolveViaOpenFIGI(isin);
   if (figi) {
     const avTicker = buildAvTicker(figi.ticker, figi.exchCode);
-    const price = await getPrice(avTicker) ?? 0;
+    const quote = await getQuote(avTicker);
     return Response.json({
-      name: figi.name,
-      ticker: avTicker,
-      isin,
-      price,
-      sector: 'Autre',
-      type: figi.type,
-      source: price ? 'openfigi+alphavantage' : 'openfigi',
+      name: figi.name, ticker: avTicker, isin,
+      price: quote?.price ?? 0,
+      sector: 'Autre', type: figi.type,
+      source: quote ? 'openfigi+alphavantage' : 'openfigi',
     });
   }
 
@@ -106,13 +99,11 @@ export async function GET(req) {
         const ticker = match['1. symbol'];
         const name = match['2. name'];
         const type = match['3. type'] === 'ETF' ? 'ETF' : 'Action';
-        const price = await getPrice(ticker) ?? 0;
-        return Response.json({ name, ticker, isin, price, sector: 'Autre', type, source: 'alphavantage-search' });
+        const quote = await getQuote(ticker);
+        return Response.json({ name, ticker, isin, price: quote?.price ?? 0, sector: 'Autre', type, source: 'alphavantage-search' });
       }
     } catch {}
   }
 
-  return Response.json({
-    error: `ISIN ${isin} introuvable automatiquement. Ajoute-le dans le fichier app/api/isin/route.js dans l'objet KNOWN.`
-  }, { status: 404 });
+  return Response.json({ error: `ISIN ${isin} introuvable. Ajoute-le manuellement dans app/api/isin/route.js.` }, { status: 404 });
 }
