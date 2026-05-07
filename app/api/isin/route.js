@@ -14,7 +14,7 @@ const KNOWN = {
   'FR0010527275': { name: 'Amundi MSCI World PEA', ticker: 'CW8.PA', sector: 'Monde', type: 'ETF' },
   'FR0013412285': { name: 'Amundi CAC 40 PEA', ticker: 'C40.PA', sector: 'France', type: 'ETF' },
   'LU1681043599': { name: 'Lyxor Core MSCI World PEA', ticker: 'LCWD.PA', sector: 'Monde', type: 'ETF' },
-  'FR0011550185': { name: 'Amundi MSCI World UCITS ETF', ticker: 'AMERW.PA', sector: 'Monde', type: 'ETF' },
+  'FR0011550185': { name: 'BNP Paribas Easy S&P 500 UCITS ETF', ticker: 'ESE.PA', sector: 'USA', type: 'ETF' },
   'DK0062498333': { name: 'Novo Nordisk', ticker: 'NOV.DE', fallbacks: ['NVO', 'NOVO-B.CO'], sector: 'Santé', type: 'Action' },
   'US0231351067': { name: 'Amazon', ticker: 'AMZN', sector: 'Technologie', type: 'Action' },
   'US5949181045': { name: 'Microsoft', ticker: 'MSFT', sector: 'Technologie', type: 'Action' },
@@ -23,8 +23,7 @@ const KNOWN = {
 };
 
 // Certains ETF Euronext sont cotés en centimes d'euro par Alpha Vantage.
-// Si le ticker est .PA ou .DE et que le prix semble en centimes (> 500),
-// on vérifie si diviser par 100 donne une valeur plausible (entre 1 et 500).
+// Si ticker européen et prix > 500, on vérifie si /100 donne une valeur plausible.
 function normalizeCentimes(price, ticker) {
   const isEuropean = ticker.includes('.PA') || ticker.includes('.DE') || ticker.includes('.AMS');
   if (isEuropean && price > 500) {
