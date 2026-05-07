@@ -1,0 +1,5 @@
+"use client";
+import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, AreaChart, Area, CartesianGrid, XAxis, YAxis } from 'recharts';
+const tip={background:'#0d1a2b',border:'1px solid #20324d',borderRadius:12,color:'#e8eefc'};
+export const AllocationChart=({data})=><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="name" innerRadius={85} outerRadius={130} paddingAngle={3}>{data.map(e=><Cell key={e.name} fill={e.color}/>)}</Pie><Tooltip contentStyle={tip}/></PieChart></ResponsiveContainer>;
+export const EquityChart=({data})=><ResponsiveContainer width="100%" height="100%"><AreaChart data={data}><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#60a5fa" stopOpacity={0.35}/><stop offset="95%" stopColor="#60a5fa" stopOpacity={0}/></linearGradient></defs><CartesianGrid stroke="rgba(255,255,255,.06)"/><XAxis dataKey="month" stroke="#8ea2c6"/><YAxis stroke="#8ea2c6"/><Tooltip contentStyle={tip}/><Area type="monotone" dataKey="value" stroke="#60a5fa" fill="url(#g)"/></AreaChart></ResponsiveContainer>;

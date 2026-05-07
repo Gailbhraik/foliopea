@@ -1,0 +1,4 @@
+import { PORTFOLIO } from '../../../lib/data';
+const KEY = process.env.ALPHA_VANTAGE_API_KEY;
+const BASE = 'https://www.alphavantage.co/query';
+export async function GET(req){ const { searchParams } = new URL(req.url); const ticker = searchParams.get('ticker'); const item = PORTFOLIO.find(p => p.ticker === ticker); if(!item) return Response.json({ error:'not found' }, { status:404 }); if(!KEY) return Response.json({ ticker, price:item.price, source:'mock', note:'set ALPHA_VANTAGE_API_KEY' }); const url = `${BASE}?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(ticker)}&apikey=${encodeURIComponent(KEY)}`; const res = await fetch(url, { cache:'no-store' }); const data = await res.json(); const price = Number(data?.['Global Quote']?.['05. price'] ?? item.price); return Response.json({ ticker, price, source:'alphavantage' }); }
