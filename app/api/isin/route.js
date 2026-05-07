@@ -1,7 +1,6 @@
 const KEY = process.env.ALPHA_VANTAGE_API_KEY;
 const AV_BASE = 'https://www.alphavantage.co/query';
 
-// Ticker en EUR prioritaire pour les valeurs non-françaises cotées en Europe
 const KNOWN = {
   'FR0000120073': { name: 'Air Liquide', ticker: 'AI.PA', sector: 'Industrie', type: 'Action' },
   'FR0000121014': { name: 'LVMH', ticker: 'MC.PA', sector: 'Luxe', type: 'Action' },
@@ -15,9 +14,8 @@ const KNOWN = {
   'FR0010527275': { name: 'Amundi MSCI World PEA', ticker: 'CW8.PA', sector: 'Monde', type: 'ETF' },
   'FR0013412285': { name: 'Amundi CAC 40 PEA', ticker: 'C40.PA', sector: 'France', type: 'ETF' },
   'LU1681043599': { name: 'Lyxor Core MSCI World PEA', ticker: 'LCWD.PA', sector: 'Monde', type: 'ETF' },
-  // Cotation Xetra en EUR — plus proche du cours affiché par les courtiers français
-  'DK0062498333': { name: 'Novo Nordisk', ticker: 'NVO2.DE', sector: 'Santé', type: 'Action' },
-  // Actions US — cours en USD
+  // Novo Nordisk — plusieurs tickers selon la place, on essaie dans l'ordre
+  'DK0062498333': { name: 'Novo Nordisk', ticker: 'NOV.DE', fallbacks: ['NVO', 'NOVO-B.CO'], sector: 'Santé', type: 'Action' },
   'US0231351067': { name: 'Amazon', ticker: 'AMZN', sector: 'Technologie', type: 'Action' },
   'US5949181045': { name: 'Microsoft', ticker: 'MSFT', sector: 'Technologie', type: 'Action' },
   'US0378331005': { name: 'Apple', ticker: 'AAPL', sector: 'Technologie', type: 'Action' },
@@ -30,11 +28,19 @@ async function getQuote(ticker) {
     const url = `${AV_BASE}?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(ticker)}&apikey=${encodeURIComponent(KEY)}`;
     const res = await fetch(url, { cache: 'no-store' });
     const data = await res.json();
-    const gq = data?.['Global Quote'];
-    const price = Number(gq?.['05. price']);
-    if (!price || price <= 0) return null;
-    return { price };
+    const price = Number(data?.['Global Quote']?.['05. price']);
+    return price > 0 ? { price, ticker } : null;
   } catch { return null; }
+}
+
+// Essaie le ticker principal puis les fallbacks jusqu'à obtenir un prix
+async function getQuoteWithFallbacks(ticker, fallbacks = []) {
+  const all = [ticker, ...fallbacks];
+  for (const t of all) {
+    const q = await getQuote(t);
+    if (q) return q;
+  }
+  return null;
 }
 
 async function resolveViaOpenFIGI(isin) {
@@ -48,7 +54,6 @@ async function resolveViaOpenFIGI(isin) {
     const data = await res.json();
     const matches = data?.[0]?.data;
     if (!matches?.length) return null;
-    // Préférer les cotations européennes en EUR (GY=Xetra, PA=Paris) avant US
     const preferred =
       matches.find(m => m.exchCode === 'PA') ||
       matches.find(m => m.exchCode === 'GY') ||
@@ -76,20 +81,25 @@ export async function GET(req) {
   const isin = searchParams.get('isin')?.toUpperCase()?.trim();
   if (!isin || isin.length < 10) return Response.json({ error: 'ISIN invalide.' }, { status: 400 });
 
-  // 1. Mapping manuel
+  // 1. Mapping manuel avec fallbacks
   if (KNOWN[isin]) {
     const k = KNOWN[isin];
-    const quote = await getQuote(k.ticker);
-    return Response.json({ ...k, isin, price: quote?.price ?? 0, source: quote ? 'alphavantage' : 'mock' });
+    const quote = await getQuoteWithFallbacks(k.ticker, k.fallbacks);
+    return Response.json({
+      name: k.name, ticker: quote?.ticker ?? k.ticker, isin,
+      price: quote?.price ?? 0,
+      sector: k.sector, type: k.type,
+      source: quote ? 'alphavantage' : 'mock',
+    });
   }
 
-  // 2. OpenFIGI (préfère cotation européenne en EUR)
+  // 2. OpenFIGI
   const figi = await resolveViaOpenFIGI(isin);
   if (figi) {
     const avTicker = buildAvTicker(figi.ticker, figi.exchCode);
     const quote = await getQuote(avTicker);
     return Response.json({
-      name: figi.name, ticker: avTicker, isin,
+      name: figi.name, ticker: quote?.ticker ?? avTicker, isin,
       price: quote?.price ?? 0,
       sector: 'Autre', type: figi.type,
       source: quote ? 'openfigi+alphavantage' : 'openfigi',
