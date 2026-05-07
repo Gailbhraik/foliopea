@@ -10,6 +10,8 @@ export default function Home() {
   const [form, setForm] = useState(EMPTY);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
   const [error, setError] = useState('');
   const [ready, setReady] = useState(false);
 
@@ -24,6 +26,26 @@ export default function Home() {
   }, [portfolio, ready]);
 
   const { computed, total, perf } = useMemo(() => summarize(portfolio), [portfolio]);
+
+  const refreshPrices = async () => {
+    if (portfolio.length === 0) return;
+    setRefreshing(true);
+    try {
+      const updated = await Promise.all(
+        portfolio.map(async (r) => {
+          try {
+            const res = await fetch(`/api/isin?isin=${encodeURIComponent(r.isin)}`);
+            const data = await res.json();
+            if (res.ok && data.price > 0) return { ...r, price: data.price };
+          } catch {}
+          return r; // garde l'ancien prix si échec
+        })
+      );
+      setPortfolio(updated);
+      setLastUpdate(new Date());
+    } catch {}
+    setRefreshing(false);
+  };
 
   const save = async () => {
     if (!form.isin || !form.qty) { setError('Remplis les deux champs.'); return; }
@@ -47,6 +69,7 @@ export default function Home() {
         buys: [], dividends: [],
       };
       setPortfolio(p => [...p, row]);
+      setLastUpdate(new Date());
       setForm(EMPTY); setShowForm(false);
     } catch { setError('Erreur réseau, réessaie.'); }
     setLoading(false);
@@ -62,15 +85,25 @@ export default function Home() {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'foliopea.csv'; a.click();
   };
 
+  const fmtTime = (d) => d ? d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : null;
+
   return (
     <main style={page}>
       <div style={wrap}>
         <header style={topBar}>
           <div>
             <h1 style={{ margin: 0, fontSize: 'clamp(28px,4vw,44px)' }}>FolioPEA</h1>
-            <p style={{ color: '#8ea2c6', margin: '6px 0 0' }}>Ton portefeuille PEA · {portfolio.length} ligne{portfolio.length > 1 ? 's' : ''}</p>
+            <p style={{ color: '#8ea2c6', margin: '6px 0 0' }}>
+              Ton portefeuille PEA · {portfolio.length} ligne{portfolio.length > 1 ? 's' : ''}
+              {lastUpdate && <span style={{ marginLeft: 10, fontSize: 11 }}>Mis à jour à {fmtTime(lastUpdate)}</span>}
+            </p>
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {portfolio.length > 0 && (
+              <button onClick={refreshPrices} style={btnOut} disabled={refreshing}>
+                {refreshing ? '⏳ Rafraîchissement...' : '🔄 Rafraîchir les cours'}
+              </button>
+            )}
             <button onClick={() => setShowForm(v => !v)} style={btn}>+ Ajouter un titre</button>
             {portfolio.length > 0 && <button onClick={exportCSV} style={btnOut}>Export CSV</button>}
           </div>
@@ -122,7 +155,7 @@ export default function Home() {
           </div>
         ) : (
           <div style={card}>
-            <div style={{ padding: '18px 20px', borderBottom: '1px solid #20324d', display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ padding: '18px 20px', borderBottom: '1px solid #20324d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <strong>Portefeuille</strong>
               <span style={{ color: '#8ea2c6', fontSize: 13 }}>{computed.length} ligne{computed.length > 1 ? 's' : ''}</span>
             </div>
