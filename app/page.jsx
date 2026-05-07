@@ -1,19 +1,85 @@
 "use client";
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { summarize, fmtAuto, fmt } from '../lib/compute';
+import { summarize, fmtAuto, fmt, enrich } from '../lib/compute';
 
-const EMPTY = { isin: '', qty: '' };
+const EMPTY = { isin: '', qty: '', pru: '' };
+
+const SECTOR_COLORS = {
+  'Technologie': '#6366f1', 'Finance': '#3b82f6', 'Santé': '#10b981',
+  'Consommation': '#f59e0b', 'Énergie': '#ef4444', 'Industrie': '#8b5cf6',
+  'Services': '#06b6d4', 'Monde': '#ec4899', 'France': '#14b8a6',
+  'USA': '#f97316', 'Luxe': '#a855f7', 'Autre': '#64748b',
+};
+
+function TypeBadge({ type }) {
+  return <span className={`badge ${type === 'ETF' ? 'badge-blue' : 'badge-gold'}`}>{type}</span>;
+}
+
+function PerfBadge({ pct }) {
+  const pos = pct >= 0;
+  return <span className={`badge ${pos ? 'badge-green' : 'badge-red'}`}>{pos ? '+' : ''}{pct.toFixed(2)}%</span>;
+}
+
+function StatCard({ label, value, sub, color }) {
+  return (
+    <div style={{ background: 'linear-gradient(135deg, #111827 0%, #1a2236 100%)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 16, padding: '20px 24px', flex: 1, minWidth: 180 }}>
+      <div style={{ fontSize: 12, color: '#64748b', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, color: color || '#e2e8f0', lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: '#64748b', marginTop: 8 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function SectorBar({ bySector, total }) {
+  const entries = Object.entries(bySector).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) return null;
+  return (
+    <div>
+      <div style={{ display: 'flex', height: 8, borderRadius: 8, overflow: 'hidden', gap: 2, marginBottom: 16 }}>
+        {entries.map(([s, v]) => (
+          <div key={s} style={{ flex: v / total, background: SECTOR_COLORS[s] || '#64748b', minWidth: 2 }} title={`${s}: ${((v/total)*100).toFixed(1)}%`} />
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px' }}>
+        {entries.map(([s, v]) => (
+          <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: SECTOR_COLORS[s] || '#64748b', flexShrink: 0 }} />
+            <span style={{ color: '#94a3b8' }}>{s}</span>
+            <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{((v/total)*100).toFixed(1)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Modal({ open, onClose, children }) {
+  useEffect(() => {
+    const h = e => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+  if (!open) return null;
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 20, width: '100%', maxWidth: 520, boxShadow: '0 25px 60px rgba(0,0,0,0.6)' }} className="fade-in">
+        {children}
+      </div>
+    </div>
+  );
+}
 
 export default function Home() {
   const [portfolio, setPortfolio] = useState([]);
   const [form, setForm] = useState(EMPTY);
-  const [showForm, setShowForm] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [error, setError] = useState('');
   const [ready, setReady] = useState(false);
+  const [activeTab, setActiveTab] = useState('positions');
 
   useEffect(() => {
     try { const raw = localStorage.getItem('foliopea'); if (raw) setPortfolio(JSON.parse(raw)); } catch {}
@@ -25,44 +91,43 @@ export default function Home() {
     localStorage.setItem('foliopea', JSON.stringify(portfolio));
   }, [portfolio, ready]);
 
-  const { computed, total, perf } = useMemo(() => summarize(portfolio), [portfolio]);
+  const { computed, total, perf, cost, bySector } = useMemo(() => summarize(portfolio), [portfolio]);
+  const perfPct = cost > 0 ? (perf / cost) * 100 : 0;
 
-  const refreshPrices = async () => {
-    if (portfolio.length === 0) return;
+  const refreshPrices = useCallback(async () => {
+    if (!portfolio.length) return;
     setRefreshing(true);
-    try {
-      const updated = await Promise.all(
-        portfolio.map(async (r) => {
-          try {
-            const res = await fetch(`/api/isin?isin=${encodeURIComponent(r.isin)}`);
-            const data = await res.json();
-            if (res.ok && data.price > 0) return { ...r, price: data.price };
-          } catch {}
-          return r; // garde l'ancien prix si échec
-        })
-      );
-      setPortfolio(updated);
-      setLastUpdate(new Date());
-    } catch {}
+    const updated = await Promise.all(
+      portfolio.map(async r => {
+        try {
+          const res = await fetch(`/api/isin?isin=${encodeURIComponent(r.isin)}`);
+          const data = await res.json();
+          if (res.ok && data.price > 0) return { ...r, price: data.price };
+        } catch {}
+        return r;
+      })
+    );
+    setPortfolio(updated);
+    setLastUpdate(new Date());
     setRefreshing(false);
-  };
+  }, [portfolio]);
 
   const save = async () => {
-    if (!form.isin || !form.qty) { setError('Remplis les deux champs.'); return; }
-    if (portfolio.find(r => r.isin === form.isin.trim().toUpperCase())) { setError('Ce titre est déjà dans ton portfolio.'); return; }
+    if (!form.isin || !form.qty) { setError('ISIN et quantité obligatoires.'); return; }
+    if (portfolio.find(r => r.isin === form.isin.trim().toUpperCase())) { setError('Ce titre est déjà dans le portfolio.'); return; }
     setLoading(true); setError('');
     try {
       const res = await fetch(`/api/isin?isin=${encodeURIComponent(form.isin.trim().toUpperCase())}`);
       const data = await res.json();
       if (!res.ok || data.error) { setError(data.error || 'ISIN introuvable.'); setLoading(false); return; }
+      const marketPrice = data.price;
+      const pru = form.pru ? Number(form.pru) : marketPrice;
       const row = {
         id: form.isin.trim().toLowerCase().replace(/[^a-z0-9]/g, '-'),
         isin: form.isin.trim().toUpperCase(),
         qty: Number(form.qty),
-        pru: data.price,
-        price: data.price,
-        name: data.name,
-        ticker: data.ticker,
+        pru, price: marketPrice,
+        name: data.name, ticker: data.ticker,
         sector: data.sector || 'Autre',
         type: data.type || 'Action',
         currency: data.currency || 'EUR',
@@ -70,137 +135,240 @@ export default function Home() {
       };
       setPortfolio(p => [...p, row]);
       setLastUpdate(new Date());
-      setForm(EMPTY); setShowForm(false);
-    } catch { setError('Erreur réseau, réessaie.'); }
+      setForm(EMPTY); setShowModal(false);
+    } catch { setError('Erreur réseau.'); }
     setLoading(false);
   };
 
-  const remove = (i) => setPortfolio(p => p.filter((_, j) => j !== i));
-  const cancel = () => { setForm(EMPTY); setError(''); setShowForm(false); };
+  const remove = i => setPortfolio(p => p.filter((_, j) => j !== i));
 
   const exportCSV = () => {
-    const headers = 'name,ticker,isin,qty,pru,price,currency,sector,type';
+    const h = 'name,ticker,isin,qty,pru,price,currency,sector,type';
     const rows = portfolio.map(r => [r.name, r.ticker, r.isin, r.qty, r.pru, r.price, r.currency, r.sector, r.type].join(','));
-    const blob = new Blob([[headers, ...rows].join('\n')], { type: 'text/csv' });
+    const blob = new Blob([[h, ...rows].join('\n')], { type: 'text/csv' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'foliopea.csv'; a.click();
   };
 
-  const fmtTime = (d) => d ? d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : null;
+  const fmtTime = d => d?.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const topPos = [...computed].sort((a, b) => b.value - a.value).slice(0, 3);
 
   return (
-    <main style={page}>
-      <div style={wrap}>
-        <header style={topBar}>
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#0b0f1a' }}>
+      {/* SIDEBAR */}
+      <aside style={{ width: 240, flexShrink: 0, borderRight: '1px solid rgba(255,255,255,0.07)', display: 'flex', flexDirection: 'column', position: 'sticky', top: 0, height: '100vh', background: '#0d1220' }}>
+        <div style={{ padding: '28px 24px 20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 32 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>📈</div>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 16, letterSpacing: '-0.02em' }}>FolioPEA</div>
+              <div style={{ fontSize: 11, color: '#475569', fontWeight: 500 }}>Dashboard</div>
+            </div>
+          </div>
+          <nav style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {[['📊', 'Vue d\'ensemble', 'home'], ['💼', 'Portefeuille', 'portfolio'], ['📉', 'Performance', 'perf'], ['⚙️', 'Paramètres', 'settings']].map(([icon, label, id]) => (
+              <button key={id} onClick={() => setActiveTab(id === 'home' ? 'positions' : id)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 10, border: 'none', background: (activeTab === 'positions' && id === 'home') || activeTab === id ? 'rgba(99,102,241,0.15)' : 'transparent', color: (activeTab === 'positions' && id === 'home') || activeTab === id ? '#818cf8' : '#64748b', cursor: 'pointer', fontSize: 14, fontWeight: 500, textAlign: 'left', width: '100%', transition: 'all 0.15s' }}>
+                <span style={{ fontSize: 16 }}>{icon}</span>{label}
+              </button>
+            ))}
+          </nav>
+        </div>
+        <div style={{ marginTop: 'auto', padding: '20px 24px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+          <div style={{ fontSize: 11, color: '#334155', marginBottom: 6 }}>Dernière MAJ</div>
+          <div style={{ fontSize: 12, color: '#475569', fontWeight: 500 }}>{lastUpdate ? fmtTime(lastUpdate) : 'Jamais'}</div>
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <main style={{ flex: 1, overflow: 'auto', padding: '32px 36px' }}>
+
+        {/* TOP BAR */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 32, flexWrap: 'wrap', gap: 16 }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: 'clamp(28px,4vw,44px)' }}>FolioPEA</h1>
-            <p style={{ color: '#8ea2c6', margin: '6px 0 0' }}>
-              Ton portefeuille PEA · {portfolio.length} ligne{portfolio.length > 1 ? 's' : ''}
-              {lastUpdate && <span style={{ marginLeft: 10, fontSize: 11 }}>Mis à jour à {fmtTime(lastUpdate)}</span>}
-            </p>
+            <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.03em', marginBottom: 4 }}>Vue d’ensemble</h1>
+            <p style={{ fontSize: 13, color: '#475569' }}>{portfolio.length} position{portfolio.length > 1 ? 's' : ''} · PEA</p>
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             {portfolio.length > 0 && (
-              <button onClick={refreshPrices} style={btnOut} disabled={refreshing}>
-                {refreshing ? '⏳ Rafraîchissement...' : '🔄 Rafraîchir les cours'}
+              <button className="btn-ghost" onClick={refreshPrices} disabled={refreshing}>
+                <span style={{ fontSize: 14 }}>{refreshing ? '⏳' : '🔄'}</span>
+                {refreshing ? 'Mise à jour...' : 'Actualiser'}
               </button>
             )}
-            <button onClick={() => setShowForm(v => !v)} style={btn}>+ Ajouter un titre</button>
-            {portfolio.length > 0 && <button onClick={exportCSV} style={btnOut}>Export CSV</button>}
+            {portfolio.length > 0 && <button className="btn-ghost" onClick={exportCSV}><span>↓</span> Export CSV</button>}
+            <button className="btn-primary" onClick={() => { setForm(EMPTY); setError(''); setShowModal(true); }}>
+              <span style={{ fontSize: 16, lineHeight: 1 }}>+</span> Ajouter
+            </button>
           </div>
-        </header>
+        </div>
 
-        {showForm && (
-          <div style={formCard}>
-            <div style={formHead}>
-              <strong>Ajouter un titre à ton PEA</strong>
-              <button onClick={cancel} style={closeBtn}>✕</button>
-            </div>
-            <div style={{ padding: 24, display: 'grid', gap: 16 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                <label style={lbl}>
-                  ISIN *
-                  <input type="text" value={form.isin} onChange={e => setForm(f => ({ ...f, isin: e.target.value.toUpperCase() }))} placeholder="ex: FR0000120073" style={input} maxLength={12} />
-                  <span style={{ color: '#8ea2c6', fontSize: 11 }}>Code à 12 caractères sur ton relevé de courtier</span>
-                </label>
-                <label style={lbl}>
-                  Nombre de parts *
-                  <input type="number" min="0" step="any" value={form.qty} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} placeholder="ex: 26" style={input} />
-                  <span style={{ color: '#8ea2c6', fontSize: 11 }}>Quantité de titres détenus</span>
-                </label>
-              </div>
-              {error && <div style={{ color: '#fb7185', fontSize: 13 }}>{error}</div>}
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-                <button onClick={cancel} style={btnOut}>Annuler</button>
-                <button onClick={save} style={btn} disabled={loading}>{loading ? 'Recherche...' : 'Ajouter'}</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div style={{ height: 16 }} />
-
-        <section style={grid}>
-          {[['Valeur totale', fmt(total)], ['Plus-value', fmt(perf)], ['Positions', computed.length]].map(([a, b]) => (
-            <div key={a} style={card}><div style={{ padding: 20 }}><div style={{ color: '#8ea2c6', fontSize: 13 }}>{a}</div><div style={{ fontSize: 28, fontWeight: 800, marginTop: 10 }}>{b}</div></div></div>
-          ))}
-        </section>
-
-        <div style={{ height: 16 }} />
+        {/* STAT CARDS */}
+        <div style={{ display: 'flex', gap: 16, marginBottom: 28, flexWrap: 'wrap' }}>
+          <StatCard label="Valeur totale" value={fmt(total)} sub={`Investi : ${fmt(cost)}`} />
+          <StatCard
+            label="Plus-value"
+            value={fmt(perf)}
+            sub={`${perf >= 0 ? '+' : ''}${perfPct.toFixed(2)}% depuis l’achat`}
+            color={perf >= 0 ? '#10b981' : '#ef4444'}
+          />
+          <StatCard label="Positions" value={computed.length} sub={`${computed.filter(r => r.type === 'ETF').length} ETF · ${computed.filter(r => r.type !== 'ETF').length} Actions`} />
+          <StatCard
+            label="Meilleure perf"
+            value={topPos[0] ? `+${topPos[0]?.perfPct?.toFixed(1)}%` : '—'}
+            sub={topPos[0]?.name || ''}
+            color="#10b981"
+          />
+        </div>
 
         {portfolio.length === 0 ? (
-          <div style={{ ...card, textAlign: 'center', padding: 48, color: '#8ea2c6' }}>
-            <div style={{ fontSize: 52, marginBottom: 16 }}>📊</div>
-            <div style={{ fontSize: 18, color: '#e8eefc', marginBottom: 8 }}>Ton portefeuille est vide.</div>
-            <div>Clique sur <strong>+ Ajouter un titre</strong> et entre un ISIN + une quantité pour commencer.</div>
+          <div className="fade-in" style={{ background: '#111827', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: 20, padding: '64px 32px', textAlign: 'center' }}>
+            <div style={{ fontSize: 56, marginBottom: 20 }}>📊</div>
+            <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 12 }}>Portfolio vide</div>
+            <div style={{ color: '#475569', fontSize: 14, marginBottom: 28, maxWidth: 360, margin: '0 auto 28px' }}>Ajoute ton premier titre en entrant un code ISIN et une quantité.</div>
+            <button className="btn-primary" onClick={() => setShowModal(true)}>+ Ajouter un titre</button>
           </div>
         ) : (
-          <div style={card}>
-            <div style={{ padding: '18px 20px', borderBottom: '1px solid #20324d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <strong>Portefeuille</strong>
-              <span style={{ color: '#8ea2c6', fontSize: 13 }}>{computed.length} ligne{computed.length > 1 ? 's' : ''}</span>
-            </div>
-            <div style={{ padding: 20, display: 'grid', gap: 10 }}>
-              {computed.map((r, i) => (
-                <div key={r.id || i} style={rowWrap}>
-                  <Link href={`/portfolio/${r.id}`} style={rowLink}>
-                    <div>
-                      <strong>{r.name}</strong>
-                      <div style={{ color: '#8ea2c6', fontSize: 12 }}>{r.isin} · {r.ticker} · {r.sector}</div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <strong>{fmtAuto(r.value, r.currency)}</strong>
-                      <div style={{ color: r.perf >= 0 ? '#6ee7b7' : '#fb7185', fontSize: 12 }}>
-                        {fmtAuto(r.perf, r.currency)} ({r.perfPct.toFixed(2)}%)
-                        {r.currency && r.currency !== 'EUR' && <span style={{ marginLeft: 6, opacity: 0.6 }}>{r.currency}</span>}
-                      </div>
-                    </div>
-                  </Link>
-                  <button onClick={() => remove(i)} style={{ ...iconBtn, color: '#fb7185', marginRight: 12 }}>🗑️</button>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20 }}>
+
+            {/* POSITIONS TABLE */}
+            <div>
+              <div style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 18, overflow: 'hidden' }}>
+                <div style={{ padding: '18px 24px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 700, fontSize: 15 }}>Positions</span>
+                  <span style={{ fontSize: 12, color: '#475569' }}>{computed.length} ligne{computed.length > 1 ? 's' : ''}</span>
                 </div>
-              ))}
+                {/* Table header */}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 80px', padding: '10px 24px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  {['Titre', 'Cours', 'Valeur', 'Performance', ''].map(h => (
+                    <div key={h} style={{ fontSize: 11, color: '#334155', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</div>
+                  ))}
+                </div>
+                {computed.map((r, i) => (
+                  <div key={r.id || i} className="hover-row" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 80px', padding: '14px 24px', borderBottom: '1px solid rgba(255,255,255,0.04)', alignItems: 'center', cursor: 'pointer' }}>
+                    <Link href={`/portfolio/${r.id}`} style={{ textDecoration: 'none', color: 'inherit', display: 'contents' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ width: 36, height: 36, borderRadius: 10, background: `${SECTOR_COLORS[r.sector] || '#64748b'}22`, border: `1px solid ${SECTOR_COLORS[r.sector] || '#64748b'}44`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: SECTOR_COLORS[r.sector] || '#64748b', flexShrink: 0 }}>
+                          {r.ticker?.replace('.PA','').replace('.DE','').slice(0,3)}
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>{r.name}</div>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <span style={{ fontSize: 11, color: '#475569' }}>{r.qty} parts</span>
+                            <TypeBadge type={r.type} />
+                          </div>
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>{fmtAuto(r.price, r.currency)}</div>
+                        <div style={{ fontSize: 11, color: '#475569' }}>PRU {fmtAuto(r.pru, r.currency)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700 }}>{fmtAuto(r.value, r.currency)}</div>
+                        <div style={{ fontSize: 11, color: '#475569' }}>{((r.value/total)*100).toFixed(1)}% du portef.</div>
+                      </div>
+                      <div>
+                        <PerfBadge pct={r.perfPct} />
+                        <div style={{ fontSize: 11, color: r.perf >= 0 ? '#059669' : '#dc2626', marginTop: 4 }}>
+                          {r.perf >= 0 ? '+' : ''}{fmtAuto(r.perf, r.currency)}
+                        </div>
+                      </div>
+                    </Link>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <button onClick={() => remove(i)} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.2)', background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 13, transition: 'all 0.15s' }} title="Supprimer">🗑️</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* RIGHT PANEL */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+              {/* Répartition sectorielle */}
+              <div style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 18, padding: '20px 24px' }}>
+                <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 18 }}>Répartition</div>
+                <SectorBar bySector={bySector} total={total} />
+              </div>
+
+              {/* Top positions */}
+              <div style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 18, padding: '20px 24px' }}>
+                <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>Top positions</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {topPos.map((r, i) => (
+                    <div key={r.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ width: 24, height: 24, borderRadius: 6, background: '#1a2236', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#6366f1', fontWeight: 700 }}>#{i+1}</div>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 600 }}>{r.name}</div>
+                          <div style={{ fontSize: 11, color: '#475569' }}>{((r.value/total)*100).toFixed(1)}% du portef.</div>
+                        </div>
+                      </div>
+                      <PerfBadge pct={r.perfPct} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Investissement */}
+              <div style={{ background: 'linear-gradient(135deg,rgba(99,102,241,0.12),rgba(139,92,246,0.08))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 18, padding: '20px 24px' }}>
+                <div style={{ fontSize: 12, color: '#6366f1', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 14 }}>Résumé</div>
+                {[['Investi', fmt(cost)], ['Valeur actuelle', fmt(total)], ['Plus-value', `${perf >= 0 ? '+' : ''}${fmt(perf)}`], ['Rendement', `${perf >= 0 ? '+' : ''}${perfPct.toFixed(2)}%`]].map(([l, v], i) => (
+                  <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: i < 3 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                    <span style={{ fontSize: 13, color: '#64748b' }}>{l}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: l === 'Plus-value' || l === 'Rendement' ? (perf >= 0 ? '#10b981' : '#ef4444') : '#e2e8f0' }}>{v}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
+      </main>
 
-        <div style={{ height: 24 }} />
-        <div style={{ color: '#4a6080', fontSize: 12, textAlign: 'center' }}>Données stockées localement · Aucune donnée envoyée</div>
-      </div>
-    </main>
+      {/* MODAL AJOUT */}
+      <Modal open={showModal} onClose={() => { setShowModal(false); setError(''); setForm(EMPTY); }}>
+        <div style={{ padding: '24px 28px 0', borderBottom: '1px solid rgba(255,255,255,0.07)', paddingBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 17 }}>Ajouter un titre</div>
+            <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>Entre l’ISIN de ton titre pour l’ajouter au portfolio</div>
+          </div>
+          <button onClick={() => { setShowModal(false); setError(''); }} style={{ border: 'none', background: 'rgba(255,255,255,0.06)', color: '#94a3b8', width: 32, height: 32, borderRadius: 8, cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+        </div>
+        <div style={{ padding: 28, display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div>
+              <label style={{ fontSize: 12, color: '#64748b', fontWeight: 500, display: 'block', marginBottom: 8 }}>Code ISIN *</label>
+              <input
+                type="text" value={form.isin} maxLength={12}
+                onChange={e => setForm(f => ({ ...f, isin: e.target.value.toUpperCase() }))}
+                placeholder="FR0000120073"
+                style={{ width: '100%', padding: '11px 14px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#1a2236', color: '#e2e8f0', fontSize: 14, outline: 'none' }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, color: '#64748b', fontWeight: 500, display: 'block', marginBottom: 8 }}>Nb de parts *</label>
+              <input
+                type="number" min="0" step="any" value={form.qty}
+                onChange={e => setForm(f => ({ ...f, qty: e.target.value }))}
+                placeholder="26"
+                style={{ width: '100%', padding: '11px 14px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#1a2236', color: '#e2e8f0', fontSize: 14, outline: 'none' }}
+              />
+            </div>
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: '#64748b', fontWeight: 500, display: 'block', marginBottom: 8 }}>Prix de revient unitaire <span style={{ color: '#334155' }}>(optionnel)</span></label>
+            <input
+              type="number" min="0" step="any" value={form.pru}
+              onChange={e => setForm(f => ({ ...f, pru: e.target.value }))}
+              placeholder="Laisse vide pour utiliser le cours actuel"
+              style={{ width: '100%', padding: '11px 14px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#1a2236', color: '#e2e8f0', fontSize: 14, outline: 'none' }}
+            />
+          </div>
+          {error && <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#f87171' }}>{error}</div>}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
+            <button className="btn-ghost" onClick={() => { setShowModal(false); setError(''); }}>Annuler</button>
+            <button className="btn-primary" onClick={save} disabled={loading}>{loading ? '⏳ Recherche...' : 'Ajouter le titre'}</button>
+          </div>
+        </div>
+      </Modal>
+    </div>
   );
 }
-
-const page = { minHeight: '100vh', background: 'radial-gradient(circle at top,#11213b 0,#07111f 45%,#050a12 100%)', color: '#e8eefc', fontFamily: 'Inter,system-ui,sans-serif', padding: '28px' };
-const wrap = { maxWidth: 1080, margin: '0 auto' };
-const topBar = { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16, marginBottom: 22, flexWrap: 'wrap' };
-const grid = { display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 16 };
-const card = { background: 'linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02))', border: '1px solid #20324d', borderRadius: 22, boxShadow: '0 20px 50px rgba(0,0,0,.35)', overflow: 'hidden' };
-const formCard = { background: 'linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03))', border: '1px solid #34d399', borderRadius: 22, overflow: 'hidden', marginTop: 16 };
-const formHead = { padding: '18px 20px', borderBottom: '1px solid #20324d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' };
-const input = { padding: '12px 14px', borderRadius: 14, border: '1px solid #20324d', background: 'rgba(255,255,255,.06)', color: '#e8eefc', fontSize: 15, outline: 'none', width: '100%', boxSizing: 'border-box' };
-const lbl = { display: 'flex', flexDirection: 'column', gap: 8, color: '#8ea2c6', fontSize: 13 };
-const btn = { padding: '12px 20px', borderRadius: 14, border: 'none', background: '#34d399', color: '#07111f', fontWeight: 700, cursor: 'pointer' };
-const btnOut = { padding: '12px 20px', borderRadius: 14, border: '1px solid #20324d', background: 'transparent', color: '#e8eefc', fontWeight: 600, cursor: 'pointer' };
-const closeBtn = { border: 'none', background: 'transparent', color: '#8ea2c6', fontSize: 18, cursor: 'pointer' };
-const rowWrap = { display: 'flex', alignItems: 'center', border: '1px solid #20324d', borderRadius: 16, background: 'rgba(255,255,255,.03)' };
-const rowLink = { flex: 1, display: 'flex', justifyContent: 'space-between', padding: '14px 16px', textDecoration: 'none', color: 'inherit' };
-const iconBtn = { border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 16, padding: '4px 8px' };
