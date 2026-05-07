@@ -12,18 +12,13 @@
   --text2: #94a3b8;
   --text3: #64748b;
   --green: #10b981;
-  --green2: #059669;
   --red: #ef4444;
-  --red2: #dc2626;
-  --blue: #3b82f6;
-  --blue2: #6366f1;
   --accent: #6366f1;
   --accent2: #818cf8;
   --gold: #f59e0b;
-  --sidebar: 240px;
 }
 
-body { background: var(--bg); color: var(--text); }
+body { background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
 
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -39,16 +34,17 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
 }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-.fade-in { animation: fadeIn 0.3s ease; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.fade-in { animation: fadeIn 0.25s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
-.hover-row:hover { background: rgba(255,255,255,0.04) !important; transition: background 0.15s; }
+.hover-row { transition: background 0.15s; }
+.hover-row:hover { background: rgba(255,255,255,0.04) !important; }
 
 .btn-primary {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 10px 18px; border-radius: 10px; border: none;
   background: var(--accent); color: #fff; font-weight: 600; font-size: 14px;
-  cursor: pointer; transition: all 0.2s;
+  cursor: pointer; transition: all 0.2s; white-space: nowrap;
 }
 .btn-primary:hover { background: var(--accent2); transform: translateY(-1px); box-shadow: 0 4px 20px rgba(99,102,241,0.4); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
@@ -58,7 +54,7 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
   padding: 10px 18px; border-radius: 10px;
   border: 1px solid var(--border2); background: transparent;
   color: var(--text2); font-weight: 500; font-size: 14px;
-  cursor: pointer; transition: all 0.2s;
+  cursor: pointer; transition: all 0.2s; white-space: nowrap;
 }
 .btn-ghost:hover { border-color: var(--accent); color: var(--accent2); background: rgba(99,102,241,0.08); }
 .btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -67,8 +63,42 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
   display: inline-flex; align-items: center;
   padding: 2px 8px; border-radius: 20px;
   font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 .badge-green { background: rgba(16,185,129,0.15); color: var(--green); }
 .badge-red { background: rgba(239,68,68,0.15); color: var(--red); }
 .badge-blue { background: rgba(99,102,241,0.15); color: var(--accent2); }
 .badge-gold { background: rgba(245,158,11,0.15); color: var(--gold); }
+
+/* ---- RESPONSIVE ---- */
+
+/* Sidebar visible uniquement desktop */
+.sidebar { display: flex; }
+.bottom-nav { display: none; }
+.main-pad { padding: 32px 36px; }
+.stat-grid { display: flex; gap: 16px; flex-wrap: wrap; }
+.content-grid { display: grid; grid-template-columns: 1fr 340px; gap: 20px; }
+.table-header { display: grid !important; }
+.table-row { display: grid !important; }
+.modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+@media (max-width: 900px) {
+  .content-grid { grid-template-columns: 1fr; }
+  .sidebar { display: none !important; }
+  .bottom-nav { display: flex !important; }
+  .main-pad { padding: 20px 16px 90px; }
+  .stat-grid { gap: 10px; }
+  .stat-grid > div { min-width: calc(50% - 5px) !important; flex: 1 1 calc(50% - 5px) !important; padding: 16px !important; }
+  .stat-grid > div > div:nth-child(2) { font-size: 20px !important; }
+  .table-header { display: none !important; }
+  .table-row { grid-template-columns: 1fr auto !important; gap: 0 !important; padding: 14px 16px !important; }
+  .table-row-inner { display: flex !important; justify-content: space-between !important; align-items: center !important; }
+  .modal-grid { grid-template-columns: 1fr !important; }
+  .topbar-actions .btn-ghost { display: none; }
+  .topbar-actions .btn-ghost.always { display: inline-flex; }
+}
+
+@media (max-width: 480px) {
+  .stat-grid > div { min-width: 100% !important; flex: 1 1 100% !important; }
+  .main-pad { padding: 16px 12px 90px; }
+}
