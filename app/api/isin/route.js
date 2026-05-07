@@ -1,6 +1,7 @@
 const KEY = process.env.ALPHA_VANTAGE_API_KEY;
 const AV_BASE = 'https://www.alphavantage.co/query';
 
+// Ticker en EUR prioritaire pour les valeurs non-françaises cotées en Europe
 const KNOWN = {
   'FR0000120073': { name: 'Air Liquide', ticker: 'AI.PA', sector: 'Industrie', type: 'Action' },
   'FR0000121014': { name: 'LVMH', ticker: 'MC.PA', sector: 'Luxe', type: 'Action' },
@@ -14,7 +15,9 @@ const KNOWN = {
   'FR0010527275': { name: 'Amundi MSCI World PEA', ticker: 'CW8.PA', sector: 'Monde', type: 'ETF' },
   'FR0013412285': { name: 'Amundi CAC 40 PEA', ticker: 'C40.PA', sector: 'France', type: 'ETF' },
   'LU1681043599': { name: 'Lyxor Core MSCI World PEA', ticker: 'LCWD.PA', sector: 'Monde', type: 'ETF' },
-  'DK0062498333': { name: 'Novo Nordisk', ticker: 'NVO', sector: 'Santé', type: 'Action' },
+  // Cotation Xetra en EUR — plus proche du cours affiché par les courtiers français
+  'DK0062498333': { name: 'Novo Nordisk', ticker: 'NVO2.DE', sector: 'Santé', type: 'Action' },
+  // Actions US — cours en USD
   'US0231351067': { name: 'Amazon', ticker: 'AMZN', sector: 'Technologie', type: 'Action' },
   'US5949181045': { name: 'Microsoft', ticker: 'MSFT', sector: 'Technologie', type: 'Action' },
   'US0378331005': { name: 'Apple', ticker: 'AAPL', sector: 'Technologie', type: 'Action' },
@@ -45,7 +48,12 @@ async function resolveViaOpenFIGI(isin) {
     const data = await res.json();
     const matches = data?.[0]?.data;
     if (!matches?.length) return null;
-    const preferred = matches.find(m => ['UN','UP','UA','UW','US','PA','GY','LN'].includes(m.exchCode)) || matches[0];
+    // Préférer les cotations européennes en EUR (GY=Xetra, PA=Paris) avant US
+    const preferred =
+      matches.find(m => m.exchCode === 'PA') ||
+      matches.find(m => m.exchCode === 'GY') ||
+      matches.find(m => ['UN','UP','UA','UW','US'].includes(m.exchCode)) ||
+      matches[0];
     return {
       name: preferred.name || preferred.securityDescription || isin,
       ticker: preferred.ticker,
@@ -75,7 +83,7 @@ export async function GET(req) {
     return Response.json({ ...k, isin, price: quote?.price ?? 0, source: quote ? 'alphavantage' : 'mock' });
   }
 
-  // 2. OpenFIGI
+  // 2. OpenFIGI (préfère cotation européenne en EUR)
   const figi = await resolveViaOpenFIGI(isin);
   if (figi) {
     const avTicker = buildAvTicker(figi.ticker, figi.exchCode);
